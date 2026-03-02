@@ -1,0 +1,23 @@
+{
+  "name": "figma-sync-plugin",
+  "id": "1",
+  "api": "1.0.0",
+  "main": "code.js",
+  "capabilities": [],
+  "enableProposedApi": false,
+  "editorType": [
+    "figma"
+  ],
+  "permissions": [
+    "currentuser"
+  ],
+  "ui": "ui.html",
+  "networkAccess": {
+    "allowedDomains": [
+      "ws://localhost:3000",
+      "http://localhost:3000",
+      "https://s3-alpha.figma.com"
+    ],
+    "reasoning": "Needs access to local WebSocket server for real-time sync"
+  }
+}

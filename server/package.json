@@ -1,0 +1,13 @@
+{
+    "name": "figma-sync-server",
+    "version": "1.0.0",
+    "description": "WebSocket server for Figma File SYNC collaboration plugin",
+    "main": "index.js",
+    "scripts": {
+        "start": "node index.js"
+    },
+    "dependencies": {
+        "express": "^4.18.2",
+        "ws": "^8.16.0"
+    }
+}

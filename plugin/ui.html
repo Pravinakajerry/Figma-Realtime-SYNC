@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <style>
+    body {
+      font-family: Inter, sans-serif;
+      margin: 0;
+      padding: 0;
+      background-color: transparent;
+      overflow: hidden;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+
+    .glass-pill {
+      display: flex;
+      align-items: center;
+      background-color: #FAFAFA;
+      border: 1px solid #E5E5E5;
+      border-radius: 6px;
+      padding: 4px;
+      width: 100%;
+      height: 100%;
+      box-sizing: border-box;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    }
+
+    /* Dark mode support */
+    @media (prefers-color-scheme: dark) {
+      .glass-pill {
+        background-color: #2C2C2C;
+        border-color: #444;
+      }
+    }
+
+    #errorBanner {
+      display: none;
+      position: absolute;
+      top: -30px;
+      left: 0;
+      right: 0;
+      background-color: #ff3b30;
+      color: white;
+      text-align: center;
+      padding: 4px;
+      font-size: 11px;
+      border-radius: 4px;
+    }
+
+    .join-state,
+    .connected-state {
+      display: flex;
+      align-items: center;
+      width: 100%;
+      height: 100%;
+    }
+
+    .connected-state {
+      display: none;
+      justify-content: space-between;
+      padding: 0 8px;
+    }
+
+    input {
+      flex-grow: 1;
+      border: none;
+      background: transparent;
+      padding: 0 8px;
+      font-size: 13px;
+      outline: none;
+      color: inherit;
+      width: 100%;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      input {
+        color: #fff;
+      }
+
+      input::placeholder {
+        color: #888;
+      }
+    }
+
+    .icon-btn {
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 6px;
+      border-radius: 4px;
+      color: #333;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .icon-btn {
+        color: #ddd;
+      }
+
+      .icon-btn:hover {
+        background-color: #444;
+      }
+    }
+
+    .icon-btn:hover {
+      background-color: #eee;
+    }
+
+    .icon-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    /* Avatar Stack */
+    .avatar-stack {
+      display: flex;
+      align-items: center;
+    }
+
+    .avatar-stack img {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 2px solid #FAFAFA;
+      margin-left: -8px;
+      background-color: #ccc;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .avatar-stack img {
+        border-color: #2C2C2C;
+      }
+    }
+
+    .avatar-stack img:first-child {
+      margin-left: 0;
+    }
+
+    /* Fallback Initials Circle */
+    .avatar-initials {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      border: 2px solid #FAFAFA;
+      margin-left: -8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      font-weight: bold;
+      color: white;
+      background-color: #18A0FB;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .avatar-initials {
+        border-color: #2C2C2C;
+      }
+    }
+
+    .avatar-initials:first-child {
+      margin-left: 0;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="errorBanner">Error</div>
+
+  <div class="glass-pill">
+    <!-- State 1: Join -->
+    <div class="join-state" id="joinState">
+      <input type="text" id="roomId" placeholder="Enter Room ID" />
+      <button class="icon-btn" id="connectBtn" title="Join Room">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round">
+          <line x1="5" y1="12" x2="19" y2="12"></line>
+          <polyline points="12 5 19 12 12 19"></polyline>
+        </svg>
+      </button>
+    </div>
+
+    <!-- State 2: Connected -->
+    <div class="connected-state" id="connectedState">
+      <div class="avatar-stack" id="avatarStack">
+        <!-- Avatars injected here -->
+      </div>
+      <div style="display: flex; align-items: center; gap: 4px;">
+        <button class="icon-btn" id="helpBtn" title="Learn more about File SYNC">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+          </svg>
+        </button>
+        <button class="icon-btn" id="disconnectBtn" title="Disconnect from room">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let ws = null;
+    let currentRoomId = null;
+    let localUserName = 'Anonymous';
+    let localUserPhoto = null;
+
+    const connectBtn = document.getElementById('connectBtn');
+    const disconnectBtn = document.getElementById('disconnectBtn');
+    const roomInput = document.getElementById('roomId');
+    const errorBanner = document.getElementById('errorBanner');
+
+    const joinState = document.getElementById('joinState');
+    const connectedState = document.getElementById('connectedState');
+    const avatarStack = document.getElementById('avatarStack');
+
+    function showError(msg) {
+      errorBanner.innerText = msg;
+      errorBanner.style.display = 'block';
+      setTimeout(() => errorBanner.style.display = 'none', 3000);
+    }
+
+    function setUIState(state, roomId) {
+      if (state === 'connected') {
+        joinState.style.display = 'none';
+        connectedState.style.display = 'flex';
+        parent.postMessage({ pluginMessage: { type: 'update_title', title: roomId } }, '*');
+      } else {
+        joinState.style.display = 'flex';
+        connectedState.style.display = 'none';
+        avatarStack.innerHTML = '';
+        connectBtn.disabled = false;
+        connectBtn.style.opacity = '1';
+        roomInput.disabled = false;
+        parent.postMessage({ pluginMessage: { type: 'update_title', title: 'Collaboration Sync' } }, '*');
+      }
+    }
+
+    function getInitials(name) {
+      if (!name) return '?';
+      return name.substring(0, 2).toUpperCase();
+    }
+
+    function renderAvatars(users) {
+      avatarStack.innerHTML = '';
+
+      // Sort to put local user first, then others
+      const sortedUsers = [...users].sort((a, b) => (a.name === localUserName ? -1 : 1));
+
+      for (const user of sortedUsers) {
+        if (user.photo) {
+          const img = document.createElement('img');
+          img.src = user.photo;
+          img.title = user.name;
+          avatarStack.appendChild(img);
+        } else {
+          const div = document.createElement('div');
+          div.className = 'avatar-initials';
+          div.innerText = getInitials(user.name);
+          div.title = user.name;
+          if (user.color) div.style.backgroundColor = user.color;
+          avatarStack.appendChild(div);
+        }
+      }
+    }
+
+    disconnectBtn.onclick = () => {
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
+      setUIState('disconnected');
+    };
+
+    const helpBtn = document.getElementById('helpBtn');
+
+    helpBtn.onclick = () => {
+      // Send a message to the Figma plugin to open an external URL. 
+      // Replace ‘https://example.com’ with the actual documentation URL later.
+      parent.postMessage({ pluginMessage: { type: 'open_url', url: 'https://example.com' } }, '*');
+    };
+
+    roomInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        connectBtn.click();
+      }
+    });
+
+    connectBtn.onclick = () => {
+      const roomId = roomInput.value.trim();
+      if (!roomId) return;
+      currentRoomId = roomId;
+      connectBtn.disabled = true;
+      connectBtn.style.opacity = '0.5';
+      roomInput.disabled = true;
+
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        ws = new WebSocket('ws://localhost:3000');
+
+        ws.onopen = () => {
+          ws.send(JSON.stringify({
+            type: 'join_room',
+            roomId: currentRoomId,
+            userName: localUserName,
+            userPhoto: localUserPhoto
+          }));
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'joined') {
+              setUIState('connected', currentRoomId);
+            } else if (msg.type === 'room_users_update') {
+              renderAvatars(msg.users);
+            } else if (msg.type === 'user_joined') {
+              parent.postMessage({ pluginMessage: { type: 'user_joined' } }, '*');
+            } else if (msg.type === 'sync_event') {
+              ws.send(JSON.stringify({ type: 'client_log', data: { event: 'RECEIVED_SYNC', payload: msg.data } }));
+              parent.postMessage({ pluginMessage: { type: 'remote_sync', data: msg.data } }, '*');
+            }
+          } catch (e) { /* silent */ }
+        };
+
+        ws.onclose = () => {
+          if (joinState.style.display !== 'none') {
+            showError("Connection failed");
+          }
+          setUIState('disconnected');
+        };
+
+        ws.onerror = (err) => {
+          showError("Cannot reach server");
+          setUIState('disconnected');
+        };
+      } else {
+        ws.send(JSON.stringify({
+          type: 'join_room',
+          roomId: currentRoomId,
+          userName: localUserName,
+          userPhoto: localUserPhoto
+        }));
+      }
+    };
+
+    window.onmessage = async (event) => {
+      const msg = event.data.pluginMessage;
+
+      if (msg && msg.type === 'init_user') {
+        if (msg.name) localUserName = msg.name;
+        if (msg.photoUrl) localUserPhoto = msg.photoUrl;
+        return;
+      }
+
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+      if (msg && msg.type === 'local_sync' && currentRoomId) {
+        const payload = msg.data;
+        payload.roomId = currentRoomId;
+        ws.send(JSON.stringify({ type: 'sync_event', data: payload }));
+      } else if (msg && msg.type === 'client_log') {
+        ws.send(JSON.stringify({ type: 'client_log', data: msg.data }));
+      } else if (msg && msg.type === 'local_log') {
+        ws.send(JSON.stringify({ type: 'client_log', data: msg.data }));
+      } else if (msg && msg.type === 'rescan_report') {
+        ws.send(JSON.stringify({ type: 'rescan_report', data: msg.data }));
+      }
+    };
+  </script>
+</body>
+
+</html>
