@@ -1,5 +1,3 @@
-"use strict";
-/// <reference types="@figma/plugin-typings" />
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -9,6 +7,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
+/// <reference types="@figma/plugin-typings" />
 // -----------------------------------------
 // ID Mapping: RemoteNodeId -> LocalNodeId
 // -----------------------------------------
@@ -17,6 +16,7 @@ const imageHashMap = new Map(); // Remote Hash -> Local Hash
 const pendingChildren = [];
 // Track nodes currently being modified by remote sync to prevent echo loops
 const currentlySyncingNodes = new Set();
+let isProcessingFullSync = false;
 // Show the UI - Minimal Bottom Bar
 figma.showUI(__html__, { title: 'Collaboration Sync', width: 260, height: 44, themeColors: true });
 const currentUser = figma.currentUser;
@@ -182,6 +182,9 @@ function extractNodePayload(node) {
 // Broadcaster: Listen to Figma changes
 // -----------------------------------------
 figma.on("documentchange", (event) => {
+    // --- FULL_SYNC LOCK: suppress ALL outgoing sync while processing incoming FULL_SYNC ---
+    if (isProcessingFullSync)
+        return;
     for (const change of event.documentChanges) {
         const node = figma.getNodeById(change.id);
         if (node && SUPPORTED_NODES.indexOf(node.type) === -1) {
@@ -337,7 +340,7 @@ function processUpsertPass2(nodeData) {
     placeNodeInHierarchy(node, nodeData.parentId, nodeData.parentIndex);
     setTimeout(() => currentlySyncingNodes.delete(localId), 200);
 }
-figma.ui.onmessage = (msg) => __awaiter(void 0, void 0, void 0, function* () {
+figma.ui.onmessage = (msg) => __awaiter(this, void 0, void 0, function* () {
     if (msg.type === 'trigger_rescan') {
         try {
             const allNodes = [];
@@ -405,6 +408,9 @@ figma.ui.onmessage = (msg) => __awaiter(void 0, void 0, void 0, function* () {
             return;
         if (data.action === 'FULL_SYNC' && data.nodes) {
             console.log(`[Plugin] Received FULL_SYNC with ${data.nodes.length} nodes.`);
+            // LOCK: suppress all outgoing documentChange events during processing
+            isProcessingFullSync = true;
+            figma.ui.postMessage({ type: 'sync_status', syncing: true });
             // Instead of blocking, do an exact-match diff to map existing local nodes
             // to remote nodes without duplicating them.
             const localNodesCount = figma.currentPage.children.filter(n => SUPPORTED_NODES.indexOf(n.type) !== -1).length;
@@ -435,14 +441,12 @@ figma.ui.onmessage = (msg) => __awaiter(void 0, void 0, void 0, function* () {
                             // Extract payload of local node to compare
                             const localPayload = extractNodePayload(localChild);
                             if (localPayload && localPayload.type === remoteNodeData.type) {
-                                // We don't want parentId/parentIndex to ruin the diff for root nodes
-                                // just focus on geometry, text, colors.
                                 const isDiff = isPayloadDifferent(remoteNodeData, localPayload);
                                 if (!isDiff) {
                                     // Exact Match! Map them.
                                     idMap.set(remoteNodeData.id, localChild.id);
                                     matchedLocalIds.add(localChild.id);
-                                    return true; // Match found, break search for this remote node
+                                    return true;
                                 }
                             }
                             if ('children' in localChild) {
@@ -457,48 +461,44 @@ figma.ui.onmessage = (msg) => __awaiter(void 0, void 0, void 0, function* () {
             }
             // PASS 1: Instantiation & Properties
             for (const nodeData of data.nodes) {
-                if (!idMap.has(nodeData.id)) {
-                    // Only process pass 1 if it wasn't deduplicated in the diff above
-                    yield processUpsertPass1(nodeData);
-                }
-                else {
-                    // Even if matched, we should process updates just in case 
-                    // (although by definition of exact match, it should be a no-op right now)
-                    // but it ensures it enters the idMap flow properly.
-                    yield processUpsertPass1(nodeData);
-                }
+                yield processUpsertPass1(nodeData);
             }
             // PASS 2: Hierarchy
             for (const nodeData of data.nodes) {
                 processUpsertPass2(nodeData);
             }
-            // MERGE: Find locally authored nodes that the host doesn't know about and broadcast them
-            const remoteIdsInSync = new Set(data.nodes.map((n) => n.id));
-            const sweepMerge = (parent) => {
-                for (const child of parent.children) {
-                    if (SUPPORTED_NODES.indexOf(child.type) === -1)
-                        continue;
-                    let remoteIdToSend = child.id;
-                    for (const [remId, locId] of idMap.entries()) {
-                        if (locId === child.id) {
-                            remoteIdToSend = remId;
-                            break;
+            // UNLOCK: allow documentChange events to flow again after a settle delay
+            setTimeout(() => {
+                isProcessingFullSync = false;
+                figma.ui.postMessage({ type: 'sync_status', syncing: false });
+                // MERGE: Find locally authored nodes that the host doesn't know about and broadcast them
+                const remoteIdsInSync = new Set(data.nodes.map((n) => n.id));
+                const sweepMerge = (parent) => {
+                    for (const child of parent.children) {
+                        if (SUPPORTED_NODES.indexOf(child.type) === -1)
+                            continue;
+                        let remoteIdToSend = child.id;
+                        for (const [remId, locId] of idMap.entries()) {
+                            if (locId === child.id) {
+                                remoteIdToSend = remId;
+                                break;
+                            }
                         }
-                    }
-                    if (!remoteIdsInSync.has(remoteIdToSend)) {
-                        const payload = extractNodePayload(child);
-                        if (payload) {
-                            if (!idMap.has(remoteIdToSend))
-                                idMap.set(remoteIdToSend, child.id);
-                            payload.id = remoteIdToSend;
-                            scheduleSync({ action: 'UPSERT', remoteNodeId: remoteIdToSend, nodeData: payload });
+                        if (!remoteIdsInSync.has(remoteIdToSend)) {
+                            const payload = extractNodePayload(child);
+                            if (payload) {
+                                if (!idMap.has(remoteIdToSend))
+                                    idMap.set(remoteIdToSend, child.id);
+                                payload.id = remoteIdToSend;
+                                scheduleSync({ action: 'UPSERT', remoteNodeId: remoteIdToSend, nodeData: payload });
+                            }
                         }
+                        if ('children' in child)
+                            sweepMerge(child);
                     }
-                    if ('children' in child)
-                        sweepMerge(child);
-                }
-            };
-            sweepMerge(figma.currentPage);
+                };
+                sweepMerge(figma.currentPage);
+            }, 500);
         }
         else if (data.action === 'UPSERT' && data.nodeData) {
             data.nodeData.id = data.remoteNodeId;

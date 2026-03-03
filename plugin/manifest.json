@@ -16,8 +16,10 @@
     "allowedDomains": [
       "ws://localhost:3000",
       "http://localhost:3000",
-      "https://s3-alpha.figma.com"
+      "https://s3-alpha.figma.com",
+      "https://ihvhwmqsjcxnxhtcnqyr.supabase.co",
+      "wss://ihvhwmqsjcxnxhtcnqyr.supabase.co"
     ],
-    "reasoning": "Needs access to local WebSocket server for real-time sync"
+    "reasoning": "Needs access to Supabase Realtime for real-time sync"
   }
 }

@@ -27,6 +27,7 @@ const pendingChildren: PendingChild[] = [];
 
 // Track nodes currently being modified by remote sync to prevent echo loops
 const currentlySyncingNodes = new Set<string>();
+let isProcessingFullSync = false;
 
 
 
@@ -203,6 +204,9 @@ function extractNodePayload(node: SceneNode): Record<string, any> | null {
 // Broadcaster: Listen to Figma changes
 // -----------------------------------------
 figma.on("documentchange", (event) => {
+    // --- FULL_SYNC LOCK: suppress ALL outgoing sync while processing incoming FULL_SYNC ---
+    if (isProcessingFullSync) return;
+
     for (const change of event.documentChanges) {
         const node = figma.getNodeById(change.id) as SceneNode | null;
 
@@ -413,6 +417,10 @@ figma.ui.onmessage = async (msg) => {
         if (data.action === 'FULL_SYNC' && data.nodes) {
             console.log(`[Plugin] Received FULL_SYNC with ${data.nodes.length} nodes.`);
 
+            // LOCK: suppress all outgoing documentChange events during processing
+            isProcessingFullSync = true;
+            figma.ui.postMessage({ type: 'sync_status', syncing: true });
+
             // Instead of blocking, do an exact-match diff to map existing local nodes
             // to remote nodes without duplicating them.
             const localNodesCount = figma.currentPage.children.filter(n => SUPPORTED_NODES.indexOf(n.type) !== -1).length;
@@ -442,14 +450,12 @@ figma.ui.onmessage = async (msg) => {
                             // Extract payload of local node to compare
                             const localPayload = extractNodePayload(localChild as SceneNode);
                             if (localPayload && localPayload.type === remoteNodeData.type) {
-                                // We don't want parentId/parentIndex to ruin the diff for root nodes
-                                // just focus on geometry, text, colors.
                                 const isDiff = isPayloadDifferent(remoteNodeData, localPayload);
                                 if (!isDiff) {
                                     // Exact Match! Map them.
                                     idMap.set(remoteNodeData.id, localChild.id);
                                     matchedLocalIds.add(localChild.id);
-                                    return true; // Match found, break search for this remote node
+                                    return true;
                                 }
                             }
 
@@ -466,42 +472,40 @@ figma.ui.onmessage = async (msg) => {
 
             // PASS 1: Instantiation & Properties
             for (const nodeData of data.nodes) {
-                if (!idMap.has(nodeData.id)) {
-                    // Only process pass 1 if it wasn't deduplicated in the diff above
-                    await processUpsertPass1(nodeData);
-                } else {
-                    // Even if matched, we should process updates just in case 
-                    // (although by definition of exact match, it should be a no-op right now)
-                    // but it ensures it enters the idMap flow properly.
-                    await processUpsertPass1(nodeData);
-                }
+                await processUpsertPass1(nodeData);
             }
             // PASS 2: Hierarchy
             for (const nodeData of data.nodes) {
                 processUpsertPass2(nodeData);
             }
 
-            // MERGE: Find locally authored nodes that the host doesn't know about and broadcast them
-            const remoteIdsInSync = new Set(data.nodes.map((n: any) => n.id));
-            const sweepMerge = (parent: SceneNode & ChildrenMixin | PageNode) => {
-                for (const child of parent.children) {
-                    if (SUPPORTED_NODES.indexOf(child.type) === -1) continue;
-                    let remoteIdToSend = child.id;
-                    for (const [remId, locId] of idMap.entries()) {
-                        if (locId === child.id) { remoteIdToSend = remId; break; }
-                    }
-                    if (!remoteIdsInSync.has(remoteIdToSend)) {
-                        const payload = extractNodePayload(child as SceneNode);
-                        if (payload) {
-                            if (!idMap.has(remoteIdToSend)) idMap.set(remoteIdToSend, child.id);
-                            payload.id = remoteIdToSend;
-                            scheduleSync({ action: 'UPSERT', remoteNodeId: remoteIdToSend, nodeData: payload });
+            // UNLOCK: allow documentChange events to flow again after a settle delay
+            setTimeout(() => {
+                isProcessingFullSync = false;
+                figma.ui.postMessage({ type: 'sync_status', syncing: false });
+
+                // MERGE: Find locally authored nodes that the host doesn't know about and broadcast them
+                const remoteIdsInSync = new Set(data.nodes.map((n: any) => n.id));
+                const sweepMerge = (parent: SceneNode & ChildrenMixin | PageNode) => {
+                    for (const child of parent.children) {
+                        if (SUPPORTED_NODES.indexOf(child.type) === -1) continue;
+                        let remoteIdToSend = child.id;
+                        for (const [remId, locId] of idMap.entries()) {
+                            if (locId === child.id) { remoteIdToSend = remId; break; }
                         }
+                        if (!remoteIdsInSync.has(remoteIdToSend)) {
+                            const payload = extractNodePayload(child as SceneNode);
+                            if (payload) {
+                                if (!idMap.has(remoteIdToSend)) idMap.set(remoteIdToSend, child.id);
+                                payload.id = remoteIdToSend;
+                                scheduleSync({ action: 'UPSERT', remoteNodeId: remoteIdToSend, nodeData: payload });
+                            }
+                        }
+                        if ('children' in child) sweepMerge(child as (SceneNode & ChildrenMixin));
                     }
-                    if ('children' in child) sweepMerge(child as (SceneNode & ChildrenMixin));
-                }
-            };
-            sweepMerge(figma.currentPage);
+                };
+                sweepMerge(figma.currentPage);
+            }, 500);
         }
         else if (data.action === 'UPSERT' && data.nodeData) {
             data.nodeData.id = data.remoteNodeId;
